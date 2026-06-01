@@ -61,6 +61,21 @@ describe('CLI parseSource', () => {
 		}
 	});
 
+	test('does not parse markdown output as an HTML document', async () => {
+		const tempDir = mkdtempSync(join(tmpdir(), 'defuddle-cli-'));
+		const filePath = join(tempDir, 'page.html');
+		try {
+			writeFileSync(filePath, fixtureHtml, 'utf-8');
+
+			const result = await parseSource(filePath, { md: true });
+
+			expect(result.output).toContain('## Appendix I');
+			expect(result.output).toContain('This is the main article content');
+		} finally {
+			rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
 	test('throws a helpful error when no source is provided and stdin is a TTY', async () => {
 		const stdin = createMockStdin('', true);
 

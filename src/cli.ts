@@ -30,6 +30,13 @@ const ansi = {
 	green: (s: string) => useColor ? `\x1b[32m${s}\x1b[39m` : s,
 };
 
+function extractVisibleText(content: string): string {
+	return content
+		.replace(/<[^>]*>/g, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+}
+
 // Read version from package.json
 const version = require('../package.json').version;
 
@@ -112,14 +119,9 @@ export async function parseSource(
 		}
 	}
 
-	// Check if parsing produced meaningful content
-	const resultDoc = parseLinkedomHTML(result.content);
-	const textContent = (
-		resultDoc.body.textContent
-		|| resultDoc.documentElement.textContent
-		|| result.content.replace(/<[^>]*>/g, '')
-	).trim();
-	if (!textContent) {
+	// Check if parsing produced meaningful content. When --markdown/--md is used,
+	// result.content is markdown text, not a complete HTML document.
+	if (!extractVisibleText(result.content)) {
 		throw new Error(`No content could be extracted from ${usesStdin ? 'stdin' : source}`);
 	}
 
