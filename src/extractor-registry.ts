@@ -260,9 +260,14 @@ export class ExtractorRegistry {
 		predicate: (instance: BaseExtractor) => boolean,
 		options?: ExtractorOptions
 	): BaseExtractor | null {
+		let domain: string;
 		try {
-			const domain = new URL(url).hostname;
+			domain = new URL(url).hostname;
+		} catch {
+			return null;
+		}
 
+		try {
 			for (const { patterns, extractor } of this.mappings) {
 				const matches = patterns.some(pattern => {
 					if (pattern instanceof RegExp) {
