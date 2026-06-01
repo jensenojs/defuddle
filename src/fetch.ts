@@ -61,7 +61,9 @@ function validateAndDecode(contentType: string, contentLength: string | null | u
 
 // Raw HTTP(S) GET through a proxy, returning status + headers + body buffer.
 // For HTTPS targets, establishes a CONNECT tunnel then does TLS over the socket.
-// node:http and node:tls are required lazily so this module is safe to import
+// Node v22 warns when http.request() is used with an authority-form CONNECT
+// path, so the HTTPS tunnel handshake is written directly to the proxy socket.
+// node:http, node:https, node:net, and node:tls are required lazily so this module is safe to import
 // in environments that don't support those APIs (e.g. Cloudflare Workers).
 function proxyGet(
 	targetUrl: string,
@@ -70,6 +72,10 @@ function proxyGet(
 ): Promise<{ status: number; resHeaders: Record<string, string | string[]>; buffer: Buffer }> {
 	// eslint-disable-next-line @typescript-eslint/no-require-imports
 	const http = require('node:http') as typeof import('node:http');
+	// eslint-disable-next-line @typescript-eslint/no-require-imports
+	const https = require('node:https') as typeof import('node:https');
+	// eslint-disable-next-line @typescript-eslint/no-require-imports
+	const net = require('node:net') as typeof import('node:net');
 	// eslint-disable-next-line @typescript-eslint/no-require-imports
 	const tls = require('node:tls') as typeof import('node:tls');
 
@@ -117,37 +123,74 @@ function proxyGet(
 		if (isHttps) {
 			const connectHeaders: Record<string, string> = { 'Host': `${target.hostname}:${targetPort}` };
 			if (proxyAuth) connectHeaders['Proxy-Authorization'] = proxyAuth;
-
-			const connectReq = http.request({
+			const proxySocket = net.connect({
 				host: proxy.hostname,
 				port: proxyPort,
-				method: 'CONNECT',
-				path: `${target.hostname}:${targetPort}`,
-				headers: connectHeaders,
 			});
-			activeRequest = connectReq;
-			connectReq.on('connect', (connectRes, socket) => {
-				if (connectRes.statusCode !== 200) {
-					socket.destroy();
-					return done(new Error(`Proxy CONNECT failed: ${connectRes.statusCode}`));
+			activeRequest = proxySocket;
+
+			let proxyResponse = Buffer.alloc(0);
+			const connectTarget = `${target.hostname}:${targetPort}`;
+			const connectRequest = [
+				`CONNECT ${connectTarget} HTTP/1.1`,
+				...Object.entries(connectHeaders).map(([name, value]) => `${name}: ${value}`),
+				'',
+				'',
+			].join('\r\n');
+
+			const onProxyData = (chunk: Buffer) => {
+				proxyResponse = Buffer.concat([proxyResponse, chunk]);
+				const headerEnd = proxyResponse.indexOf('\r\n\r\n');
+				if (headerEnd === -1) {
+					if (proxyResponse.length > 8192) {
+						proxySocket.destroy();
+						done(new Error('Proxy CONNECT response headers too large'));
+					}
+					return;
 				}
-				const tlsSocket = tls.connect({ socket, host: target.hostname, servername: target.hostname });
+
+				proxySocket.off('data', onProxyData);
+				const headerText = proxyResponse.subarray(0, headerEnd).toString('latin1');
+				const statusLine = headerText.split('\r\n', 1)[0] || '';
+				const statusMatch = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/.exec(statusLine);
+				const statusCode = statusMatch ? Number(statusMatch[1]) : 0;
+				if (statusCode !== 200) {
+					proxySocket.destroy();
+					return done(new Error(statusCode
+						? `Proxy CONNECT failed: ${statusCode}`
+						: `Invalid proxy CONNECT response: ${statusLine}`));
+				}
+
+				const extra = proxyResponse.subarray(headerEnd + 4);
+				if (extra.length > 0) {
+					proxySocket.unshift(extra);
+				}
+
+				const tlsSocket = tls.connect({ socket: proxySocket, host: target.hostname, servername: target.hostname });
 				activeRequest = tlsSocket;
 				tlsSocket.on('error', done);
 				tlsSocket.on('secureConnect', () => {
-					const req = http.request({
+					const req = https.request({
 						method: 'GET',
+						hostname: target.hostname,
+						port: targetPort,
 						path: target.pathname + target.search,
 						headers: outHeaders,
+						agent: false,
 						createConnection: () => tlsSocket as any,
-					} as any, collectResponse);
+					} as any, (res) => {
+						collectResponse(res);
+						res.on('end', () => tlsSocket.destroy());
+					});
 					activeRequest = req;
 					req.on('error', done);
 					req.end();
 				});
-			});
-			connectReq.on('error', done);
-			connectReq.end();
+			};
+
+			proxySocket.on('connect', () => proxySocket.write(connectRequest));
+			proxySocket.on('data', onProxyData);
+			proxySocket.on('error', done);
 		} else {
 			// HTTP forward proxy: send the full target URL as the request path
 			if (proxyAuth) outHeaders['Proxy-Authorization'] = proxyAuth;
