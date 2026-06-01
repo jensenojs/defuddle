@@ -5,6 +5,7 @@ import { RedditExtractor } from './extractors/reddit';
 import { TwitterExtractor } from './extractors/twitter';
 import { XArticleExtractor } from './extractors/x-article';
 import { YoutubeExtractor } from './extractors/youtube';
+import { BilibiliExtractor } from './extractors/bilibili';
 import { HackerNewsExtractor } from './extractors/hackernews';
 import { ChatGPTExtractor } from './extractors/chatgpt';
 import { ClaudeExtractor } from './extractors/claude';
@@ -25,6 +26,7 @@ import { MediumExtractor } from './extractors/medium';
 import { LeetCodeExtractor } from './extractors/leetcode';
 import { LwnExtractor } from './extractors/lwn';
 import { MastodonExtractor } from './extractors/mastodon';
+import { XiaohongshuExtractor } from './extractors/xiaohongshu';
 
 type ExtractorConstructor = new (document: Document, url: string, schemaOrgData?: any, options?: ExtractorOptions) => BaseExtractor;
 
@@ -82,6 +84,14 @@ export class ExtractorRegistry {
 				/youtu\.be\/.*/
 			],
 			extractor: YoutubeExtractor
+		});
+
+		this.register({
+			patterns: [
+				'bilibili.com',
+				/www\.bilibili\.com\/video\/BV[0-9A-Za-z]+/,
+			],
+			extractor: BilibiliExtractor
 		});
 
 		this.register({
@@ -214,6 +224,16 @@ export class ExtractorRegistry {
 		});
 
 		this.register({
+			patterns: [
+				'xiaohongshu.com',
+				'www.xiaohongshu.com',
+				/^https?:\/\/www\.xiaohongshu\.com\/explore\/.*/,
+				/^https?:\/\/www\.xiaohongshu\.com\/discovery\/item\/.*/,
+			],
+			extractor: XiaohongshuExtractor
+		});
+
+		this.register({
 			patterns: [/.*/],
 			extractor: BbcodeDataExtractor
 		});
@@ -240,9 +260,14 @@ export class ExtractorRegistry {
 		predicate: (instance: BaseExtractor) => boolean,
 		options?: ExtractorOptions
 	): BaseExtractor | null {
+		let domain: string;
 		try {
-			const domain = new URL(url).hostname;
+			domain = new URL(url).hostname;
+		} catch {
+			return null;
+		}
 
+		try {
 			for (const { patterns, extractor } of this.mappings) {
 				const matches = patterns.some(pattern => {
 					if (pattern instanceof RegExp) {
